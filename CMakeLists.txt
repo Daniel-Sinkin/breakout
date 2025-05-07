@@ -9,18 +9,8 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
 
 include(FetchContent)
 
-# Fetch GLFW
-FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.8
-)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(glfw)
-
-# Fetch GLAD
+# ---------------------------------------
+# Fetch GLAD (unchanged)
 FetchContent_Declare(
     glad
     GIT_REPOSITORY https://github.com/Dav1dde/glad.git
@@ -28,7 +18,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glad)
 
-# Fetch Dear ImGui
+# ---------------------------------------
+# Fetch Dear ImGui (unchanged)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -36,7 +27,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-# Fetch stb (single-header libraries)
+# ---------------------------------------
+# Fetch stb (unchanged)
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -44,7 +36,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
-# Fetch xtl (dependency of xtensor)
+# ---------------------------------------
+# Fetch xtl & xtensor & glm (unchanged)
 FetchContent_Declare(
     xtl
     GIT_REPOSITORY https://github.com/xtensor-stack/xtl.git
@@ -53,7 +46,6 @@ FetchContent_Declare(
 set(XTL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(xtl)
 
-# Fetch xtensor (header-only)
 FetchContent_Declare(
     xtensor
     GIT_REPOSITORY https://github.com/xtensor-stack/xtensor.git
@@ -62,6 +54,28 @@ FetchContent_Declare(
 set(XTENSOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(xtensor)
 
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.1
+)
+FetchContent_MakeAvailable(glm)
+
+# ---------------------------------------
+# Fetch SDL2 in place of GLFW
+FetchContent_Declare(
+    sdl2
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-2.26.5  # or whichever stable release you prefer
+)
+# Disable building SDL2 tests/examples to speed up
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(sdl2)
+
+# ---------------------------------------
+# Source files & executable
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_executable(main ${SOURCES})
 
@@ -74,13 +88,11 @@ add_custom_command(
 )
 
 # === include dirs ===
-# Our own code
 target_include_directories(main PRIVATE
     ${glad_SOURCE_DIR}/include
-    ${glfw_SOURCE_DIR}/include
+    ${sdl2_SOURCE_DIR}/include
 )
 
-# Third-party headers as SYSTEM (no warnings from them)
 target_include_directories(main SYSTEM PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
@@ -94,50 +106,38 @@ find_package(OpenGL REQUIRED)
 # === warnings: only for our target ===
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   target_compile_options(main PRIVATE
-    -Wall
-    -Wextra
-    -Wpedantic
-    -Werror
-    -Wshadow
-    -Wnon-virtual-dtor
-    -Wold-style-cast
-    -Wcast-align
-    -Wconversion
-    -Wsign-conversion
-    -Wnull-dereference
-    -Wdouble-promotion
-    -Wduplicated-cond
-    -Wduplicated-branches
-    -Wlogical-op
-    -Wuseless-cast
-    -Wstrict-overflow=5
-    -Wformat=2
+    -Wall -Wextra -Wpedantic -Werror -Wshadow -Wnon-virtual-dtor
+    -Wold-style-cast -Wcast-align -Wconversion -Wsign-conversion
+    -Wnull-dereference -Wdouble-promotion -Wduplicated-cond
+    -Wduplicated-branches -Wlogical-op -Wuseless-cast
+    -Wstrict-overflow=5 -Wformat=2
   )
 endif()
 
-# Link libraries
+# === Link libraries ===
 target_link_libraries(main PRIVATE
-    glfw
+    SDL2::SDL2
+    SDL2::SDL2main
     glad
     OpenGL::GL
     imgui_impl
     xtl
     xtensor
+    glm::glm
 )
 
-# === ImGui implementation ===
+# === ImGui implementation (switch to SDL backend) ===
 add_library(imgui_impl STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
-# ImGui_impl: our code gets warnings, but third-party includes do not
 target_include_directories(imgui_impl PRIVATE
-    ${glfw_SOURCE_DIR}/include
+    ${sdl2_SOURCE_DIR}/include
 )
 target_include_directories(imgui_impl SYSTEM PRIVATE
     ${imgui_SOURCE_DIR}
