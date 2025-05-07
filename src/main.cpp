@@ -367,15 +367,15 @@ auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> Shade
 }
 
 auto setup_shader_program() -> void {
-    Shader vertexShader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
-    if (vertexShader == 0) panic("Failed to compile vertex shader.");
-    Shader fragmentShader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
-    if (vertexShader == 0) panic("Failed to compile fragment shader.");
+    Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
+    if (vertex_shader == 0) panic("Failed to compile vertex shader.");
+    Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
+    if (fragment_shader == 0) panic("Failed to compile fragment shader.");
 
     global.shader_program = glCreateProgram();
 
-    glAttachShader(global.shader_program, vertexShader);
-    glAttachShader(global.shader_program, fragmentShader);
+    glAttachShader(global.shader_program, vertex_shader);
+    glAttachShader(global.shader_program, fragment_shader);
 
     glLinkProgram(global.shader_program);
     // Check link errors:
@@ -386,8 +386,8 @@ auto setup_shader_program() -> void {
     }
 
     glUseProgram(global.shader_program);
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
 }
 
 void setup_paddle_vao() {
