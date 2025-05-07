@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -24,7 +25,13 @@ using Position = glm::vec2;
 using VAO = GLuint;
 using VBO = GLuint;
 using EBO = GLuint;
+using Shader = GLuint;
 using ShaderProgram = GLuint;
+
+void panic(const std::string &message) {
+    std::cerr << "PANIC: " << message << std::endl;
+    std::exit(EXIT_FAILURE);
+}
 
 struct Constants {
     static constexpr std::string_view window_title = "Breakout";
@@ -40,6 +47,12 @@ struct Constants {
     static constexpr float paddle_bound_left = 0.2f;
     static constexpr float paddle_bound_right = 0.8f;
 
+    static constexpr int standard_value = 10;
+    static constexpr Color standard_color = Color{0.8f, 0.2f, 0.1f};
+
+    static constexpr int special_value = 25;
+    static constexpr Color special_color = Color{0.9f, 0.9f, 0.1f};
+
     static constexpr std::array<float, 12> square_vertices = {
         0.5f, 0.5f, 0.0f,
         0.5f, -0.5f, 0.0f,
@@ -50,11 +63,9 @@ struct Constants {
         0, 1, 3,
         1, 2, 3};
 
-    static constexpr std::string_view shader_dir = "assets/shaders/";
-    static constexpr std::string_view vertex_shader = "assets/shaders/vertex.glsl";
-    static constexpr std::string_view fragment_shader = "assets/shaders/fragment.glsl";
-    static constexpr std::string_view texture_dir = "assets/textures/";
-    static constexpr std::string_view default_texture = "assets/textures/wood.png";
+    static constexpr const char *fp_shader_dir = "assets/shaders/";
+    static constexpr const char *fp_vertex_shader = "assets/shaders/vertex.glsl";
+    static constexpr const char *fp_fragment_shader = "assets/shaders/fragment.glsl";
 };
 struct Block {
     Position position;
@@ -92,9 +103,18 @@ struct Global {
     std::chrono::system_clock::time_point frame_start_time;
     std::chrono::milliseconds runtime;
 
+    int gl_success;
+    char gl_error_buffer[512];
+
     GameState game;
 };
 Global global;
+
+auto handle_gl_error(const char *reason) -> void {
+    std::cerr << reason << "\n"
+              << global.gl_error_buffer << "\n";
+    panic("GL Error");
+}
 
 auto format_time(std::chrono::system_clock::time_point tp) -> const char * {
     static char buffer[64];
@@ -132,11 +152,21 @@ auto format_duration(std::chrono::milliseconds duration) -> const char * {
 auto reset_board() -> void {
     for (size_t row = 0; row < Constants::n_block_rows; ++row) {
         for (size_t col = 0; col < Constants::n_block_cols; ++col) {
+            bool is_special = row == col;
+            int value;
+            Color color;
+            if (is_special) {
+                value = Constants::special_value;
+                color = Constants::special_color;
+            } else {
+                value = Constants::standard_value;
+                color = Constants::standard_color;
+            }
             Block block = {
                 .active = true,
                 .position = Position{Constants::block_height, Constants::block_width},
-                .value = 10,
-                .color = Color{0.8f, 0.2f, 0.1f}};
+                .value = value,
+                .color = color};
             global.game.blocks[row][col] = block;
         };
     }
@@ -261,17 +291,10 @@ auto setup() -> bool {
         return false;
     }
 
-#ifdef __APPLE__
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-#else
-    // Other platforms can use higher versions if supported
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-#endif
 
     // Create window with OpenGL context
     global.window = SDL_CreateWindow(
@@ -310,57 +333,58 @@ auto setup() -> bool {
     // Initialize ImGui SDL2 + OpenGL3 backends
     ImGui_ImplSDL2_InitForOpenGL(global.window, global.gl_context);
     const char *glsl_version = nullptr;
-#ifdef __APPLE__
     glsl_version = "#version 410 core";
-#else
-    glsl_version = "#version 450 core";
-#endif
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     return true;
 }
 
-auto setup_shader_program() -> void {
-    const char *vertexShaderSource = "#version 410 core\n"
-                                     "layout (location = 0) in vec3 aPos;\n"
-                                     "void main()\n"
-                                     "{\n"
-                                     "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
-                                     "}\0";
-    GLuint vertexShader;
-    vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
-    glCompileShader(vertexShader);
-    int success;
-    char infoLog[512];
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
-                  << infoLog << std::endl;
+auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> Shader {
+    std::ifstream in(filepath);
+    if (!in) {
+        std::cerr << "Couldn't open file " << filepath << "\n";
+        return 0;
     }
+    std::string shader_source_str;
+    {
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        shader_source_str = ss.str();
+    }
+    in.close();
+    const char *vertex_shader_source = shader_source_str.c_str();
+    Shader shader;
+    shader = glCreateShader(shader_type);
+    glShaderSource(shader, 1, &vertex_shader_source, nullptr);
+    glCompileShader(shader);
 
-    const char *fragmentShaderSource = "#version 410 core\n"
-                                       "out vec4 FragColor;\n"
-                                       "void main()\n"
-                                       "{\n"
-                                       "    FragColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);\n"
-                                       "}\n";
-    unsigned int fragmentShader;
-    fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
-    glCompileShader(fragmentShader);
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &global.gl_success);
+    if (!global.gl_success) {
+        glGetShaderInfoLog(shader, 512, nullptr, global.gl_error_buffer);
+        handle_gl_error("Shader Compilation Failed.");
+    }
+    return shader;
+}
+
+auto setup_shader_program() -> void {
+    Shader vertexShader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
+    if (vertexShader == 0) panic("Failed to compile vertex shader.");
+    Shader fragmentShader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
+    if (vertexShader == 0) panic("Failed to compile fragment shader.");
 
     global.shader_program = glCreateProgram();
+
     glAttachShader(global.shader_program, vertexShader);
     glAttachShader(global.shader_program, fragmentShader);
+
     glLinkProgram(global.shader_program);
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        glGetProgramInfoLog(global.shader_program, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
-                  << infoLog << std::endl;
+    // Check link errors:
+    glGetProgramiv(global.shader_program, GL_LINK_STATUS, &global.gl_success);
+    if (!global.gl_success) {
+        glGetProgramInfoLog(global.shader_program, 512, nullptr, global.gl_error_buffer);
+        panic(std::string("Shader Program Link Failed: ") + global.gl_error_buffer);
     }
+
     glUseProgram(global.shader_program);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
@@ -411,7 +435,7 @@ void cleanup() {
 }
 
 auto main(int argc, char **argv) -> int {
-    if (!setup()) return EXIT_FAILURE;
+    if (!setup()) panic("Setup failed!");
 
     setup_shader_program();
     setup_paddle_vao();

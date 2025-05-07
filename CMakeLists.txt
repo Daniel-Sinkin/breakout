@@ -83,8 +83,8 @@ add_executable(main ${SOURCES})
 add_custom_command(
     TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/data
-        ${CMAKE_BINARY_DIR}/data
+        ${CMAKE_SOURCE_DIR}/assets
+        ${CMAKE_BINARY_DIR}/assets
 )
 
 # === include dirs ===
