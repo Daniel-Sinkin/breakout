@@ -46,8 +46,8 @@ struct Constants {
     static constexpr float block_height = 20.0f;
     static constexpr float block_width = 50.0f;
 
-    static constexpr float paddle_bound_left = 0.2f;
-    static constexpr float paddle_bound_right = 0.8f;
+    static constexpr float paddle_bound_left = 0.05f;
+    static constexpr float paddle_bound_right = 0.95f;
 
     static constexpr float paddle_width = 100.0f;
     static constexpr float paddle_height = 50.0f;
@@ -292,23 +292,35 @@ void _main_render() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     glUseProgram(global.shader_program);
+    glBindVertexArray(global.paddle_vao);
 
     UniformLocation ubo_time = glGetUniformLocation(global.shader_program, "time");
     glUniform1f(ubo_time, (float)global.runtime.count());
 
     UniformLocation ubo_pos = glGetUniformLocation(global.shader_program, "u_Pos");
-
-    glBindVertexArray(global.paddle_vao);
-
+    UniformLocation ubo_scale = glGetUniformLocation(global.shader_program, "u_Scale");
     UniformLocation ubo_color = glGetUniformLocation(global.shader_program, "u_Color");
 
-    glUniform2f(ubo_pos, global.paddle_pos - 0.5f, 0.0f);
-    glUniform3f(ubo_color, global.c_paddle.r, global.c_paddle.g, global.c_paddle.b);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    { // Paddle
+        glUniform2f(ubo_pos, 2.0f * (global.paddle_pos - 0.5f), -0.8f);
+        glUniform2f(ubo_scale, 6.0f, 3.0f);
+        glUniform3f(ubo_color, global.c_paddle.r, global.c_paddle.g, global.c_paddle.b);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
 
-    glUniform2f(ubo_pos, 0.0f, 0.5f);
-    glUniform3f(ubo_color, global.c_ball.r, global.c_ball.g, global.c_ball.b);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    { // Ball
+        glUniform2f(ubo_pos, 0.0f, 0.0f);
+        glUniform2f(ubo_scale, 2.0f, 2.0f);
+        glUniform3f(ubo_color, global.c_ball.r, global.c_ball.g, global.c_ball.b);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+
+    { // Blocks
+        glUniform2f(ubo_pos, 0.0f, 0.75f);
+        glUniform2f(ubo_scale, 3.0f, 2.0f);
+        glUniform3f(ubo_color, 0.0f, 0.0f, 0.0f);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
 
     glBindVertexArray(0);
 }
