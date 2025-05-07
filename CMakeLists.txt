@@ -80,12 +80,14 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_executable(main ${SOURCES})
 
 # Copy data directory after build
-add_custom_command(
-    TARGET main POST_BUILD
+add_custom_target(copy_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets
         ${CMAKE_BINARY_DIR}/assets
+    COMMENT "Copying assets into build directory"
 )
+
+add_dependencies(main copy_assets)
 
 # === include dirs ===
 target_include_directories(main PRIVATE

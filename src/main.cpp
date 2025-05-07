@@ -27,6 +27,7 @@ using VBO = GLuint;
 using EBO = GLuint;
 using Shader = GLuint;
 using ShaderProgram = GLuint;
+using UniformLocation = GLuint;
 
 void panic(const std::string &message) {
     std::cerr << "PANIC: " << message << std::endl;
@@ -37,6 +38,7 @@ struct Constants {
     static constexpr std::string_view window_title = "Breakout";
     static constexpr int window_width = 1280;
     static constexpr int window_height = 720;
+    static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
 
     static constexpr int n_block_rows = 5;
     static constexpr int n_block_cols = 8;
@@ -47,6 +49,9 @@ struct Constants {
     static constexpr float paddle_bound_left = 0.2f;
     static constexpr float paddle_bound_right = 0.8f;
 
+    static constexpr float paddle_width = 100.0f;
+    static constexpr float paddle_height = 50.0f;
+
     static constexpr int standard_value = 10;
     static constexpr Color standard_color = Color{0.8f, 0.2f, 0.1f};
 
@@ -54,10 +59,10 @@ struct Constants {
     static constexpr Color special_color = Color{0.9f, 0.9f, 0.1f};
 
     static constexpr std::array<float, 12> square_vertices = {
-        0.5f, 0.5f, 0.0f,
-        0.5f, -0.5f, 0.0f,
-        -0.5f, -0.5f, 0.0f,
-        -0.5f, 0.5f, 0.0f};
+        1.0f, 1.0f, 0.0f,
+        1.0f, -1.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f,
+        -1.0f, 1.0f, 0.0f};
 
     static constexpr std::array<unsigned int, 6> square_indices = {
         0, 1, 3,
@@ -94,13 +99,14 @@ struct Global {
     Color c_paddle{1.0f, 0.0f, 0.0f};
 
     float paddle_pos = 0.5f;
-    float paddle_speed = 0.01f;
+    float paddle_speed = 0.045f;
 
     Position position_ball{0.0f, 0.0f};
 
     int frame_counter = 0;
     std::chrono::system_clock::time_point run_start_time;
     std::chrono::system_clock::time_point frame_start_time;
+    std::chrono::milliseconds delta_time;
     std::chrono::milliseconds runtime;
 
     int gl_success;
@@ -193,6 +199,8 @@ auto _main_imgui() -> void {
         ImGui::Text("Frame Counter: %d", global.frame_counter);
         ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
+        ImGui::Text("Runtime Count: %lld", global.runtime.count());
+        ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
 
         ImGui::SliderFloat("Paddle", &global.paddle_pos, Constants::paddle_bound_left, Constants::paddle_bound_right);
 
@@ -256,16 +264,24 @@ void _main_handle_inputs() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
-        if (event.type == SDL_QUIT) global.running = false;
+
+        if (event.type == SDL_QUIT)
+            global.running = false;
+
         if (event.type == SDL_KEYDOWN) {
-            if (event.key.keysym.sym == SDLK_ESCAPE) global.running = false;
-        }
-        const Uint8 *state = SDL_GetKeyboardState(nullptr);
-        if (state[SDL_SCANCODE_D]) {
-            move_paddle(global.paddle_speed);
-        }
-        if (state[SDL_SCANCODE_A]) {
-            move_paddle(-global.paddle_speed);
+            switch (event.key.keysym.sym) {
+            case SDLK_ESCAPE:
+                global.running = false;
+                break;
+            case SDLK_d:
+                move_paddle(global.paddle_speed);
+                break;
+            case SDLK_a:
+                move_paddle(-global.paddle_speed);
+                break;
+            default:
+                break;
+            }
         }
     }
 }
@@ -276,8 +292,24 @@ void _main_render() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     glUseProgram(global.shader_program);
+
+    UniformLocation ubo_time = glGetUniformLocation(global.shader_program, "time");
+    glUniform1f(ubo_time, (float)global.runtime.count());
+
+    UniformLocation ubo_pos = glGetUniformLocation(global.shader_program, "u_Pos");
+
     glBindVertexArray(global.paddle_vao);
+
+    UniformLocation ubo_color = glGetUniformLocation(global.shader_program, "u_Color");
+
+    glUniform2f(ubo_pos, global.paddle_pos - 0.5f, 0.0f);
+    glUniform3f(ubo_color, global.c_paddle.r, global.c_paddle.g, global.c_paddle.b);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    glUniform2f(ubo_pos, 0.0f, 0.5f);
+    glUniform3f(ubo_color, global.c_ball.r, global.c_ball.g, global.c_ball.b);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
     glBindVertexArray(0);
 }
 
@@ -388,6 +420,11 @@ auto setup_shader_program() -> void {
     glUseProgram(global.shader_program);
     glDeleteShader(vertex_shader);
     glDeleteShader(fragment_shader);
+
+    UniformLocation ubo_paddle_width = glGetUniformLocation(global.shader_program, "paddle_width_ratio");
+    glUniform1f(ubo_paddle_width, Constants::paddle_width / Constants::window_width);
+    UniformLocation ubo_paddle_height = glGetUniformLocation(global.shader_program, "paddle_height_ratio");
+    glUniform1f(ubo_paddle_height, Constants::paddle_height / Constants::window_height);
 }
 
 void setup_paddle_vao() {
@@ -438,13 +475,17 @@ auto main(int argc, char **argv) -> int {
     if (!setup()) panic("Setup failed!");
 
     setup_shader_program();
+
     setup_paddle_vao();
 
     reset_board();
 
     global.run_start_time = std::chrono::system_clock::now();
     global.running = true;
+    // For initial delta time computation
+    global.frame_start_time = std::chrono::system_clock::now();
     while (global.running) {
+        global.delta_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - global.frame_start_time);
         global.frame_start_time = std::chrono::system_clock::now();
         global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
 
