@@ -13,7 +13,6 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include "main.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -27,6 +26,48 @@ using VBO = GLuint;
 using EBO = GLuint;
 using ShaderProgram = GLuint;
 
+struct Constants {
+    static constexpr std::string_view window_title = "Breakout";
+    static constexpr int window_width = 1280;
+    static constexpr int window_height = 720;
+
+    static constexpr int n_block_rows = 5;
+    static constexpr int n_block_cols = 8;
+
+    static constexpr float block_height = 20.0f;
+    static constexpr float block_width = 50.0f;
+
+    static constexpr float paddle_bound_left = 0.2f;
+    static constexpr float paddle_bound_right = 0.8f;
+
+    static constexpr std::array<float, 12> square_vertices = {
+        0.5f, 0.5f, 0.0f,
+        0.5f, -0.5f, 0.0f,
+        -0.5f, -0.5f, 0.0f,
+        -0.5f, 0.5f, 0.0f};
+
+    static constexpr std::array<unsigned int, 6> square_indices = {
+        0, 1, 3,
+        1, 2, 3};
+
+    static constexpr std::string_view shader_dir = "assets/shaders/";
+    static constexpr std::string_view vertex_shader = "assets/shaders/vertex.glsl";
+    static constexpr std::string_view fragment_shader = "assets/shaders/fragment.glsl";
+    static constexpr std::string_view texture_dir = "assets/textures/";
+    static constexpr std::string_view default_texture = "assets/textures/wood.png";
+};
+struct Block {
+    Position position;
+    Color color;
+    int value;
+    bool active;
+};
+struct GameState {
+    int score = 0;
+    int lives = 3;
+
+    std::array<std::array<Block, Constants::n_block_cols>, Constants::n_block_rows> blocks;
+};
 struct Global {
     SDL_Window *window = nullptr;
     bool running = false;
@@ -37,33 +78,21 @@ struct Global {
     ShaderProgram shader_program;
     VAO paddle_vao;
 
-    const char *window_title = "My Breakout Game";
-    int version_major = 0;
-    int version_minor = 1;
-
     Color c_background{1.0f, 0.5f, 0.31f};
     Color c_ball{1.0f, 1.0f, 1.0f};
-    Color c_paddle_left{1.0f, 0.0f, 0.0f};
-    Color c_paddle_right{0.0f, 0.0f, 1.0f};
+    Color c_paddle{1.0f, 0.0f, 0.0f};
 
-    float paddle_pos_left = 0.5f;
-    float paddle_pos_right = 0.5f;
+    float paddle_pos = 0.5f;
+    float paddle_speed = 0.01f;
 
     Position position_ball{0.0f, 0.0f};
-
-    float square_vertices[12] = {
-        0.5f, 0.5f, 0.0f,
-        0.5f, -0.5f, 0.0f,
-        -0.5f, -0.5f, 0.0f,
-        -0.5f, 0.5f, 0.0f};
-    unsigned int square_indices[6] = {
-        0, 1, 3,
-        1, 2, 3};
 
     int frame_counter = 0;
     std::chrono::system_clock::time_point run_start_time;
     std::chrono::system_clock::time_point frame_start_time;
     std::chrono::milliseconds runtime;
+
+    GameState game;
 };
 Global global;
 
@@ -100,37 +129,113 @@ auto format_duration(std::chrono::milliseconds duration) -> const char * {
     return buffer;
 }
 
+auto reset_board() -> void {
+    for (size_t row = 0; row < Constants::n_block_rows; ++row) {
+        for (size_t col = 0; col < Constants::n_block_cols; ++col) {
+            Block block = {
+                .active = true,
+                .position = Position{Constants::block_height, Constants::block_width},
+                .value = 10,
+                .color = Color{0.8f, 0.2f, 0.1f}};
+            global.game.blocks[row][col] = block;
+        };
+    }
+}
+
+auto destroy_block(size_t row_idx, size_t col_idx) -> void {
+    Block &block = global.game.blocks[row_idx][col_idx];
+    if (!block.active) throw std::runtime_error("Trying to destroy inactive block!");
+    block.active = false;
+    global.game.score += block.value;
+}
+
 auto _main_imgui() -> void {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame(global.window);
+    ImGui::NewFrame();
     { // Debug
-        ImGui::NewFrame();
         ImGui::Begin("Debug");
+
         ImGui::ColorEdit3("Background", glm::value_ptr(global.c_background));
         ImGui::ColorEdit3("Ball", glm::value_ptr(global.c_ball));
-        ImGui::ColorEdit3("Paddle (Left)", glm::value_ptr(global.c_paddle_left));
-        ImGui::ColorEdit3("Paddle (Right)", glm::value_ptr(global.c_paddle_right));
+        ImGui::ColorEdit3("Paddle", glm::value_ptr(global.c_paddle));
+
         ImGui::Text("Frame Counter: %d", global.frame_counter);
         ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
-        ImGui::SliderFloat("Left Paddle", &global.paddle_pos_left, 0.0f, 1.0f);
-        ImGui::SliderFloat("Right Paddle", &global.paddle_pos_right, 0.0f, 1.0f);
+
+        ImGui::SliderFloat("Paddle", &global.paddle_pos, Constants::paddle_bound_left, Constants::paddle_bound_right);
+
         ImGui::Text("Ball Position: (%f, %f)", global.position_ball.y, global.position_ball.x);
         ImGui::End();
     } // Debug
+    { // Debug::Game
+        ImGui::Begin("Debug::Game");
+        ImGui::Text("Lives: %d", global.game.lives);
+        ImGui::Text("Score: %d", global.game.score);
+        if (ImGui::Button("Reset")) {
+            reset_board();
+        }
+
+        float button_size = 30.0f;
+        for (int row = 0; row < Constants::n_block_rows; ++row) {
+            for (int col = 0; col < Constants::n_block_cols; ++col) {
+                Block &block = global.game.blocks[row][col];
+
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "##block_%d_%d", row, col);
+
+                if (!block.active) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+                } else {
+                    Color c_hovered = 0.5f * block.color + 0.5f * Color{1.0f, 1.0f, 1.0f};
+                    Color c_active = 0.3f * block.color + 0.7f * Color{1.0f, 1.0f, 1.0f};
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(block.color.r, block.color.g, block.color.b, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(c_hovered.r, c_hovered.g, c_hovered.b, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(c_active.r, c_active.g, c_active.b, 1.0f));
+                }
+
+                if (ImGui::Button(buf, ImVec2(button_size, button_size))) {
+                    if (block.active) {
+                        destroy_block(row, col);
+                    } else {
+                        block.active = true;
+                    }
+                }
+
+                ImGui::PopStyleColor(3);
+
+                if (col < Constants::n_block_cols - 1)
+                    ImGui::SameLine();
+            }
+        }
+        ImGui::End();
+    } // Debug::Game
 
     ImGui::Render();
+}
+
+void move_paddle(float move_amount) { // TODO: Make this delta time aware
+    float new_pos = global.paddle_pos + move_amount;
+    global.paddle_pos = glm::clamp(global.paddle_pos + move_amount, Constants::paddle_bound_left, Constants::paddle_bound_right);
 }
 
 void _main_handle_inputs() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
-        if (event.type == SDL_QUIT) {
-            global.running = false;
+        if (event.type == SDL_QUIT) global.running = false;
+        if (event.type == SDL_KEYDOWN) {
+            if (event.key.keysym.sym == SDLK_ESCAPE) global.running = false;
         }
-        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-            global.running = false;
+        const Uint8 *state = SDL_GetKeyboardState(nullptr);
+        if (state[SDL_SCANCODE_D]) {
+            move_paddle(global.paddle_speed);
+        }
+        if (state[SDL_SCANCODE_A]) {
+            move_paddle(-global.paddle_speed);
         }
     }
 }
@@ -170,9 +275,9 @@ auto setup() -> bool {
 
     // Create window with OpenGL context
     global.window = SDL_CreateWindow(
-        global.window_title,
+        Constants::window_title.data(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        1280, 720,
+        Constants::window_width, Constants::window_height,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!global.window) {
         std::cerr << "Error: SDL_CreateWindow failed: " << SDL_GetError() << "\n";
@@ -224,26 +329,26 @@ auto setup_shader_program() -> void {
                                      "}\0";
     GLuint vertexShader;
     vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
     glCompileShader(vertexShader);
     int success;
     char infoLog[512];
     glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
     if (!success) {
-        glGetShaderInfoLog(vertexShader, 512, NULL, infoLog);
+        glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
         std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
                   << infoLog << std::endl;
     }
 
     const char *fragmentShaderSource = "#version 410 core\n"
-                                       "out vec4 FragColor;\n" // ← missing ‘;’ here
+                                       "out vec4 FragColor;\n"
                                        "void main()\n"
                                        "{\n"
-                                       "    FragColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);\n" // ← missing ‘;’ here
+                                       "    FragColor = vec4(1.0f, 1.0f, 1.0f, 1.0f);\n"
                                        "}\n";
     unsigned int fragmentShader;
     fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
     glCompileShader(fragmentShader);
 
     global.shader_program = glCreateProgram();
@@ -252,7 +357,7 @@ auto setup_shader_program() -> void {
     glLinkProgram(global.shader_program);
     glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
     if (!success) {
-        glGetProgramInfoLog(global.shader_program, 512, NULL, infoLog);
+        glGetProgramInfoLog(global.shader_program, 512, nullptr, infoLog);
         std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
                   << infoLog << std::endl;
     }
@@ -271,8 +376,8 @@ void setup_paddle_vao() {
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER,
-        sizeof(global.square_vertices),
-        global.square_vertices,
+        sizeof(Constants::square_vertices),
+        Constants::square_vertices.data(),
         GL_STATIC_DRAW);
     glVertexAttribPointer(
         0, // location = 0 in your vertex shader
@@ -287,8 +392,8 @@ void setup_paddle_vao() {
     glGenBuffers(1, &ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-        sizeof(global.square_indices),
-        global.square_indices,
+        sizeof(Constants::square_indices),
+        Constants::square_indices.data(),
         GL_STATIC_DRAW);
 
     // 4) Unbind VAO (optional but good practice)
@@ -311,8 +416,9 @@ auto main(int argc, char **argv) -> int {
     setup_shader_program();
     setup_paddle_vao();
 
-    global.run_start_time = std::chrono::system_clock::now();
+    reset_board();
 
+    global.run_start_time = std::chrono::system_clock::now();
     global.running = true;
     while (global.running) {
         global.frame_start_time = std::chrono::system_clock::now();
