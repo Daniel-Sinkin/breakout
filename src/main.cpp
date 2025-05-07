@@ -40,8 +40,8 @@ struct Constants {
     static constexpr int window_height = 720;
     static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
 
-    static constexpr int n_block_rows = 5;
-    static constexpr int n_block_cols = 8;
+    static constexpr int n_block_rows = 4;
+    static constexpr int n_block_cols = 7;
 
     static constexpr float block_height = 20.0f;
     static constexpr float block_width = 50.0f;
@@ -77,6 +77,7 @@ struct Block {
     Color color;
     int value;
     bool active;
+    bool special;
 };
 struct GameState {
     int score = 0;
@@ -101,7 +102,8 @@ struct Global {
     float paddle_pos = 0.5f;
     float paddle_speed = 0.045f;
 
-    Position position_ball{0.0f, 0.0f};
+    Position ball_position{0.0f, -0.6f};
+    glm::vec2 ball_direction{1.0f, 1.0f};
 
     int frame_counter = 0;
     std::chrono::system_clock::time_point run_start_time;
@@ -168,9 +170,13 @@ auto reset_board() -> void {
                 value = Constants::standard_value;
                 color = Constants::standard_color;
             }
+            auto position = Position{static_cast<float>(col) / Constants::n_block_cols, static_cast<float>(row) / Constants::n_block_rows};
+            position *= glm::vec2{1.0f, -1.0f};
+            position -= glm::vec2{0.9f, -0.9f};
             Block block = {
                 .active = true,
-                .position = Position{Constants::block_height, Constants::block_width},
+                .special = is_special,
+                .position = position,
                 .value = value,
                 .color = color};
             global.game.blocks[row][col] = block;
@@ -204,7 +210,6 @@ auto _main_imgui() -> void {
 
         ImGui::SliderFloat("Paddle", &global.paddle_pos, Constants::paddle_bound_left, Constants::paddle_bound_right);
 
-        ImGui::Text("Ball Position: (%f, %f)", global.position_ball.y, global.position_ball.x);
         ImGui::End();
     } // Debug
     { // Debug::Game
@@ -249,6 +254,8 @@ auto _main_imgui() -> void {
                     ImGui::SameLine();
             }
         }
+        ImGui::Text("Ball Position: (%f, %f)", global.ball_position.x, global.ball_position.y);
+        ImGui::Text("Ball Direction: (%f, %f)", global.ball_direction.x, global.ball_direction.y);
         ImGui::End();
     } // Debug::Game
 
@@ -309,17 +316,24 @@ void _main_render() {
     }
 
     { // Ball
-        glUniform2f(ubo_pos, 0.0f, 0.0f);
+        glUniform2f(ubo_pos, global.ball_position.x, global.ball_position.y);
         glUniform2f(ubo_scale, 2.0f, 2.0f);
         glUniform3f(ubo_color, global.c_ball.r, global.c_ball.g, global.c_ball.b);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
     { // Blocks
-        glUniform2f(ubo_pos, 0.0f, 0.75f);
         glUniform2f(ubo_scale, 3.0f, 2.0f);
-        glUniform3f(ubo_color, 0.0f, 0.0f, 0.0f);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        for (size_t row = 0; row < Constants::n_block_rows; ++row) {
+            for (size_t col = 0; col < Constants::n_block_cols; ++col) {
+                Block &block = global.game.blocks[row][col];
+                if (block.active) {
+                    glUniform2f(ubo_pos, block.position.x, block.position.y);
+                    glUniform3f(ubo_color, block.color.r, block.color.g, block.color.b);
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+                }
+            }
+        }
     }
 
     glBindVertexArray(0);
@@ -502,8 +516,13 @@ auto main(int argc, char **argv) -> int {
         global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
 
         _main_handle_inputs();
-        _main_imgui();
+        { // Game Logic
+            auto ball_delta = global.ball_direction / (1000.0f * (global.delta_time.count() + 1.0f)) * 12.0f;
+            std::cout << ball_delta.x << ", " << ball_delta.y << "\n";
+            global.ball_position += ball_delta;
+        }
 
+        _main_imgui();
         _main_render();
 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
