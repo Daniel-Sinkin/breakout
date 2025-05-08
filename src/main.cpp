@@ -40,14 +40,16 @@ struct Constants {
     static constexpr int window_height = 720;
     static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
 
-    static constexpr int n_block_rows = 4;
-    static constexpr int n_block_cols = 7;
+    static constexpr int n_block_rows = 12;
+    static constexpr int n_block_cols = 35;
+    static constexpr float block_region_height = 0.4f;
+    static constexpr float block_region_width = 0.9f;
 
-    static constexpr float block_height = 0.02f;
-    static constexpr float block_width = 0.05f;
+    static constexpr float block_height = block_region_height / n_block_rows * 0.8f;
+    static constexpr float block_width = block_region_width / n_block_cols * 0.9f;
 
     static constexpr float paddle_width = 0.15f;
-    static constexpr float paddle_height = 0.01f;
+    static constexpr float paddle_height = 0.15f;
     static constexpr float paddle_collision_deadzone = 0.001f;
 
     static constexpr float ball_width = 0.05f / aspect_ratio;
@@ -87,6 +89,50 @@ struct Box {
     float width;
     float height;
 };
+enum class CollisionDirection {
+    None,
+    Left,
+    Right,
+    Top,
+    Bottom
+};
+
+auto collision_box_box_directional(const Box &b1, const Box &b2) -> CollisionDirection {
+    float left1 = b1.position.x;
+    float right1 = b1.position.x + b1.width;
+    float top1 = b1.position.y;
+    float bottom1 = b1.position.y - b1.height;
+
+    float left2 = b2.position.x;
+    float right2 = b2.position.x + b2.width;
+    float top2 = b2.position.y;
+    float bottom2 = b2.position.y - b2.height;
+
+    bool xcoll = (left1 < right2) &&
+                 (right1 > left2);
+    bool ycoll = (top1 > bottom2) &&
+                 (bottom1 < top2);
+    if (!(xcoll && ycoll)) {
+        return CollisionDirection::None;
+    }
+
+    float c1x = (left1 + right1) * 0.5f;
+    float c1y = (top1 + bottom1) * 0.5f;
+    float c2x = (left2 + right2) * 0.5f;
+    float c2y = (top2 + bottom2) * 0.5f;
+
+    float dx = c2x - c1x;
+    float dy = c2y - c1y;
+
+    float penX = (b1.width * 0.5f + b2.width * 0.5f) - std::abs(dx);
+    float penY = (b1.height * 0.5f + b2.height * 0.5f) - std::abs(dy);
+
+    if (penX < penY) {
+        return (dx > 0) ? CollisionDirection::Left : CollisionDirection::Right;
+    } else {
+        return (dy > 0) ? CollisionDirection::Bottom : CollisionDirection::Top;
+    }
+}
 
 auto collision_box_box(const Box b1, const Box b2) -> bool {
     bool xcoll = b1.position.x < b2.position.x + b2.width &&
@@ -142,7 +188,7 @@ struct Global {
     float paddle_speed = 0.045f;
 
     Box paddle{Position{0.0f, -0.8f}, Constants::paddle_width, Constants::paddle_height};
-    Box ball{Position{0.0f, 0.2f}, Constants::ball_width, Constants::ball_height};
+    Box ball{Position{0.0f, -0.6f}, Constants::ball_width, Constants::ball_height};
     glm::vec2 ball_direction = glm::normalize(glm::vec2{1.0f, -1.0f});
     float ball_speed = 0.025f;
 
@@ -212,7 +258,8 @@ auto reset_board() -> void {
                 color = Constants::standard_color;
             }
             auto position = Position{static_cast<float>(col) / Constants::n_block_cols, static_cast<float>(row) / Constants::n_block_rows};
-            position *= glm::vec2{1.0f, -1.0f};
+            position *= 2.0f * glm::vec2{1.0f, -1.0f};
+            position *= glm::vec2{Constants::block_region_width, Constants::block_region_height};
             position -= glm::vec2{0.9f, -0.9f};
             Block block = {
                 .active = true,
@@ -262,7 +309,9 @@ auto _main_imgui() -> void {
             reset_board();
         }
 
-        float button_size = 30.0f;
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+        float button_size = 10.0f;
         for (int row = 0; row < Constants::n_block_rows; ++row) {
             for (int col = 0; col < Constants::n_block_cols; ++col) {
                 Block &block = global.game.blocks[row][col];
@@ -296,6 +345,8 @@ auto _main_imgui() -> void {
                     ImGui::SameLine();
             }
         }
+        ImGui::PopStyleVar(2);
+
         ImGui::Text("Ball Position: (%f, %f)", global.ball.position.x, global.ball.position.y);
         ImGui::Text("Ball Direction: (%f, %f)", global.ball_direction.x, global.ball_direction.y);
         ImGui::Text("Paddle Position: (%f, %f)", global.paddle.position.x, global.paddle.position.y);
@@ -366,21 +417,18 @@ auto _main_render() -> void {
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
-    /*
-    if (false) { // Blocks
-        glUniform2f(ubo_scale, 3.0f, 2.0f);
+    { // Blocks
         for (size_t row = 0; row < Constants::n_block_rows; ++row) {
             for (size_t col = 0; col < Constants::n_block_cols; ++col) {
                 Block &block = global.game.blocks[row][col];
                 if (block.active) {
-                    glUniform2f(ubo_pos, block.box.position.x, block.box.position.y);
-                    glUniform3f(ubo_color, block.color.r, block.color.g, block.color.b);
+                    _gl_set_box_ubo(block.box);
+                    _gl_set_color_ubo(block.color);
                     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
                 }
             }
         }
     }
-    */
 
     glBindVertexArray(0);
 }
@@ -548,30 +596,68 @@ void _main_game_logic() {
     auto ball_delta = global.ball_direction * (global.ball_speed / (global.delta_time.count() + 1));
     global.ball.position += ball_delta;
 
-    bool ball_touched_paddle = collision_box_box(global.ball, global.paddle);
+    constexpr float deadzone = Constants::paddle_collision_deadzone;
+
+    // Block Collision
+    for (size_t row_idx = 0; row_idx < global.game.blocks.size(); ++row_idx) {
+        auto &row = global.game.blocks[row_idx];
+        for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
+            Block &blk = row[col_idx];
+            if (!blk.active) continue;
+            CollisionDirection cd = collision_box_box_directional(global.ball, blk.box);
+            if (cd != CollisionDirection::None) {
+                destroy_block(row_idx, col_idx);
+                if (cd == CollisionDirection::Left || cd == CollisionDirection::Right) {
+                    global.ball_direction.x = -global.ball_direction.x;
+                } else {
+                    global.ball_direction.y = -global.ball_direction.y;
+                }
+                return;
+            }
+        }
+    }
+
+    // Paddle Collision
+    CollisionDirection cd = collision_box_box_directional(global.ball, global.paddle);
+    if (cd != CollisionDirection::None) {
+        switch (cd) {
+        case CollisionDirection::None:
+            break;
+        case CollisionDirection::Left:
+            global.ball_direction.x = -global.ball_direction.x;
+            global.ball.position.x = global.paddle.position.x - global.ball.width - deadzone;
+            break;
+        case CollisionDirection::Right:
+            global.ball_direction.x = -global.ball_direction.x;
+            global.ball.position.x = global.paddle.position.x + global.paddle.width + deadzone;
+            break;
+        case CollisionDirection::Top:
+            global.ball_direction.y = -global.ball_direction.y;
+            global.ball.position.y = global.paddle.position.y + global.ball.height + deadzone;
+            break;
+        case CollisionDirection::Bottom:
+            global.ball_direction.y = -global.ball_direction.y;
+            global.ball.position.y = global.paddle.position.y - global.paddle.height - deadzone;
+            break;
+        }
+        return;
+    }
+
     bool ball_touched_right_wall = global.ball.position.x + global.ball.width >= 1.0f;
     bool ball_touched_left_wall = global.ball.position.x <= -1.0f;
     bool ball_touched_top_wall = global.ball.position.y >= 1.0f;
     bool ball_touched_bottom_wall = global.ball.position.y - global.ball.height <= -1.0f;
 
-    constexpr float deadzone = Constants::paddle_collision_deadzone;
-    if (ball_touched_paddle) {
-        global.ball.position.y = global.paddle.position.y + global.ball.height + deadzone;
-        global.ball_direction.y = -global.ball_direction.y;
-    }
     if (ball_touched_right_wall) {
         global.ball.position.x = 1.0f - global.ball.width - deadzone;
         global.ball_direction.x = -global.ball_direction.x;
-    }
-    if (ball_touched_left_wall) {
+    } else if (ball_touched_left_wall) {
         global.ball.position.x = -1.0f + deadzone;
         global.ball_direction.x = -global.ball_direction.x;
-    }
-    if (ball_touched_top_wall) {
+    } else if (ball_touched_top_wall) {
         global.ball.position.y = 1.0f - deadzone;
         global.ball_direction.y = -global.ball_direction.y;
-    }
-    if (ball_touched_bottom_wall) {
+    } else if (ball_touched_bottom_wall) {
         global.ball.position.y = -1.0f + +global.ball.height + deadzone;
         global.ball_direction.y = -global.ball_direction.y;
     }
