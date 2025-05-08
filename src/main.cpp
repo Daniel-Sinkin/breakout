@@ -21,15 +21,15 @@
 #include <sstream>
 
 using Color = glm::vec3;
-using Position = glm::vec2;
-using VAO = GLuint;
-using VBO = GLuint;
-using EBO = GLuint;
-using Shader = GLuint;
-using ShaderProgram = GLuint;
-using UniformLocation = GLuint;
+using Position = glm::vec2; // (y, x)
+using gl_VAO = GLuint;
+using gl_VBO = GLuint;
+using gl_EBO = GLuint;
+using gl_Shader = GLuint;
+using gl_ShaderProgram = GLuint;
+using gl_UBO = GLuint;
 
-void panic(const std::string &message) {
+auto panic(const std::string &message) -> void {
     std::cerr << "PANIC: " << message << std::endl;
     std::exit(EXIT_FAILURE);
 }
@@ -43,14 +43,15 @@ struct Constants {
     static constexpr int n_block_rows = 4;
     static constexpr int n_block_cols = 7;
 
-    static constexpr float block_height = 20.0f;
-    static constexpr float block_width = 50.0f;
+    static constexpr float block_height = 0.02f;
+    static constexpr float block_width = 0.05f;
 
-    static constexpr float paddle_bound_left = 0.05f;
-    static constexpr float paddle_bound_right = 0.95f;
+    static constexpr float paddle_width = 0.15f;
+    static constexpr float paddle_height = 0.01f;
+    static constexpr float paddle_collision_deadzone = 0.001f;
 
-    static constexpr float paddle_width = 100.0f;
-    static constexpr float paddle_height = 50.0f;
+    static constexpr float ball_width = 0.05f / aspect_ratio;
+    static constexpr float ball_height = 0.05f;
 
     static constexpr int standard_value = 10;
     static constexpr Color standard_color = Color{0.8f, 0.2f, 0.1f};
@@ -59,21 +60,46 @@ struct Constants {
     static constexpr Color special_color = Color{0.9f, 0.9f, 0.1f};
 
     static constexpr std::array<float, 12> square_vertices = {
-        1.0f, 1.0f, 0.0f,
         1.0f, -1.0f, 0.0f,
-        -1.0f, -1.0f, 0.0f,
-        -1.0f, 1.0f, 0.0f};
+        1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, -1.0f, 0.0f};
 
     static constexpr std::array<unsigned int, 6> square_indices = {
         0, 1, 3,
         1, 2, 3};
 
+    struct Color {
+        static constexpr auto white = glm::vec3(1.0f, 1.0f, 1.0f);
+        static constexpr auto black = glm::vec3(0.0f, 0.0f, 0.0f);
+        static constexpr auto red = glm::vec3(1.0f, 0.0f, 0.0f);
+        static constexpr auto green = glm::vec3(0.0f, 1.0f, 0.0f);
+        static constexpr auto blue = glm::vec3(0.0f, 0.0f, 1.0f);
+    };
+
     static constexpr const char *fp_shader_dir = "assets/shaders/";
     static constexpr const char *fp_vertex_shader = "assets/shaders/vertex.glsl";
     static constexpr const char *fp_fragment_shader = "assets/shaders/fragment.glsl";
 };
-struct Block {
+
+struct Box {
     Position position;
+    float width;
+    float height;
+};
+
+auto collision_box_box(const Box b1, const Box b2) -> bool {
+    bool xcoll = b1.position.x < b2.position.x + b2.width &&
+                 b1.position.x + b1.width > b2.position.x;
+
+    bool ycoll = b1.position.y > b2.position.y - b2.height &&
+                 b1.position.y - b1.height < b2.position.y;
+
+    return xcoll && ycoll;
+}
+
+struct Block {
+    Box box;
     Color color;
     int value;
     bool active;
@@ -85,6 +111,20 @@ struct GameState {
 
     std::array<std::array<Block, Constants::n_block_cols>, Constants::n_block_rows> blocks;
 };
+
+struct s_UBO {
+    gl_UBO time;
+    gl_UBO pos;
+    gl_UBO width;
+    gl_UBO height;
+    gl_UBO color;
+};
+struct s_Color {
+    Color background{1.0f, 0.5f, 0.31f};
+    Color ball{1.0f, 1.0f, 1.0f};
+    Color paddle{1.0f, 0.0f, 0.0f};
+};
+
 struct Global {
     SDL_Window *window = nullptr;
     bool running = false;
@@ -92,18 +132,19 @@ struct Global {
     ImGuiIO imgui_io;
     SDL_GLContext gl_context;
 
-    ShaderProgram shader_program;
-    VAO paddle_vao;
+    gl_ShaderProgram shader_program;
+    gl_VAO paddle_vao;
+    s_UBO ubo;
 
-    Color c_background{1.0f, 0.5f, 0.31f};
-    Color c_ball{1.0f, 1.0f, 1.0f};
-    Color c_paddle{1.0f, 0.0f, 0.0f};
+    s_Color color;
 
     float paddle_pos = 0.5f;
     float paddle_speed = 0.045f;
 
-    Position ball_position{0.0f, -0.6f};
-    glm::vec2 ball_direction{1.0f, 1.0f};
+    Box paddle{Position{0.0f, -0.8f}, Constants::paddle_width, Constants::paddle_height};
+    Box ball{Position{0.0f, 0.2f}, Constants::ball_width, Constants::ball_height};
+    glm::vec2 ball_direction = glm::normalize(glm::vec2{1.0f, -1.0f});
+    float ball_speed = 0.025f;
 
     int frame_counter = 0;
     std::chrono::system_clock::time_point run_start_time;
@@ -176,7 +217,7 @@ auto reset_board() -> void {
             Block block = {
                 .active = true,
                 .special = is_special,
-                .position = position,
+                .box = Box{position, Constants::block_width, Constants::block_height},
                 .value = value,
                 .color = color};
             global.game.blocks[row][col] = block;
@@ -198,17 +239,18 @@ auto _main_imgui() -> void {
     { // Debug
         ImGui::Begin("Debug");
 
-        ImGui::ColorEdit3("Background", glm::value_ptr(global.c_background));
-        ImGui::ColorEdit3("Ball", glm::value_ptr(global.c_ball));
-        ImGui::ColorEdit3("Paddle", glm::value_ptr(global.c_paddle));
+        ImGui::ColorEdit3("Background", glm::value_ptr(global.color.background));
+        ImGui::ColorEdit3("Paddle", glm::value_ptr(global.color.paddle));
+        ImGui::ColorEdit3("Ball", glm::value_ptr(global.color.ball));
+
+        ImGui::SliderFloat("Ball Speed", &global.ball_speed, 0.0f, 0.2f);
 
         ImGui::Text("Frame Counter: %d", global.frame_counter);
         ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
         ImGui::Text("Runtime Count: %lld", global.runtime.count());
         ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
-
-        ImGui::SliderFloat("Paddle", &global.paddle_pos, Constants::paddle_bound_left, Constants::paddle_bound_right);
+        ImGui::Text("Paddle position: %f", global.paddle.position.x);
 
         ImGui::End();
     } // Debug
@@ -254,20 +296,21 @@ auto _main_imgui() -> void {
                     ImGui::SameLine();
             }
         }
-        ImGui::Text("Ball Position: (%f, %f)", global.ball_position.x, global.ball_position.y);
+        ImGui::Text("Ball Position: (%f, %f)", global.ball.position.x, global.ball.position.y);
         ImGui::Text("Ball Direction: (%f, %f)", global.ball_direction.x, global.ball_direction.y);
+        ImGui::Text("Paddle Position: (%f, %f)", global.paddle.position.x, global.paddle.position.y);
         ImGui::End();
     } // Debug::Game
 
     ImGui::Render();
 }
 
-void move_paddle(float move_amount) { // TODO: Make this delta time aware
-    float new_pos = global.paddle_pos + move_amount;
-    global.paddle_pos = glm::clamp(global.paddle_pos + move_amount, Constants::paddle_bound_left, Constants::paddle_bound_right);
+auto move_paddle(float move_amount) -> void {
+    float new_pos = global.paddle.position.x + move_amount;
+    global.paddle.position.x = glm::clamp(new_pos, -1.0f, 1.0f - global.paddle.width);
 }
 
-void _main_handle_inputs() {
+auto _main_handle_inputs() -> void {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
@@ -293,48 +336,51 @@ void _main_handle_inputs() {
     }
 }
 
-void _main_render() {
+auto _gl_set_box_ubo(const Box box) -> void {
+    glUniform2f(global.ubo.pos, box.position.x, box.position.y);
+    glUniform1f(global.ubo.width, box.width);
+    glUniform1f(global.ubo.height, box.height);
+}
+auto _gl_set_color_ubo(const Color color) -> void {
+    glUniform3f(global.ubo.color, color.r, color.g, color.b);
+}
+
+auto _main_render() -> void {
     glViewport(0, 0, (int)global.imgui_io.DisplaySize.x, (int)global.imgui_io.DisplaySize.y);
-    glClearColor(global.c_background.r, global.c_background.g, global.c_background.b, 1.0f);
+    glClearColor(global.color.background.r, global.color.background.g, global.color.background.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     glUseProgram(global.shader_program);
     glBindVertexArray(global.paddle_vao);
 
-    UniformLocation ubo_time = glGetUniformLocation(global.shader_program, "time");
-    glUniform1f(ubo_time, (float)global.runtime.count());
-
-    UniformLocation ubo_pos = glGetUniformLocation(global.shader_program, "u_Pos");
-    UniformLocation ubo_scale = glGetUniformLocation(global.shader_program, "u_Scale");
-    UniformLocation ubo_color = glGetUniformLocation(global.shader_program, "u_Color");
+    glUniform1f(global.ubo.time, (float)global.runtime.count());
 
     { // Paddle
-        glUniform2f(ubo_pos, 2.0f * (global.paddle_pos - 0.5f), -0.8f);
-        glUniform2f(ubo_scale, 6.0f, 3.0f);
-        glUniform3f(ubo_color, global.c_paddle.r, global.c_paddle.g, global.c_paddle.b);
+        _gl_set_box_ubo(global.paddle);
+        _gl_set_color_ubo(global.color.paddle);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
-
     { // Ball
-        glUniform2f(ubo_pos, global.ball_position.x, global.ball_position.y);
-        glUniform2f(ubo_scale, 2.0f, 2.0f);
-        glUniform3f(ubo_color, global.c_ball.r, global.c_ball.g, global.c_ball.b);
+        _gl_set_box_ubo(global.ball);
+        _gl_set_color_ubo(global.color.ball);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
-    { // Blocks
+    /*
+    if (false) { // Blocks
         glUniform2f(ubo_scale, 3.0f, 2.0f);
         for (size_t row = 0; row < Constants::n_block_rows; ++row) {
             for (size_t col = 0; col < Constants::n_block_cols; ++col) {
                 Block &block = global.game.blocks[row][col];
                 if (block.active) {
-                    glUniform2f(ubo_pos, block.position.x, block.position.y);
+                    glUniform2f(ubo_pos, block.box.position.x, block.box.position.y);
                     glUniform3f(ubo_color, block.color.r, block.color.g, block.color.b);
                     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
                 }
             }
         }
     }
+    */
 
     glBindVertexArray(0);
 }
@@ -397,7 +443,7 @@ auto setup() -> bool {
     return true;
 }
 
-auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> Shader {
+auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> gl_Shader {
     std::ifstream in(filepath);
     if (!in) {
         std::cerr << "Couldn't open file " << filepath << "\n";
@@ -411,7 +457,7 @@ auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> Shade
     }
     in.close();
     const char *vertex_shader_source = shader_source_str.c_str();
-    Shader shader;
+    gl_Shader shader;
     shader = glCreateShader(shader_type);
     glShaderSource(shader, 1, &vertex_shader_source, nullptr);
     glCompileShader(shader);
@@ -425,9 +471,9 @@ auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> Shade
 }
 
 auto setup_shader_program() -> void {
-    Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
+    gl_Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
     if (vertex_shader == 0) panic("Failed to compile vertex shader.");
-    Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
+    gl_Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
     if (fragment_shader == 0) panic("Failed to compile fragment shader.");
 
     global.shader_program = glCreateProgram();
@@ -447,19 +493,20 @@ auto setup_shader_program() -> void {
     glDeleteShader(vertex_shader);
     glDeleteShader(fragment_shader);
 
-    UniformLocation ubo_paddle_width = glGetUniformLocation(global.shader_program, "paddle_width_ratio");
-    glUniform1f(ubo_paddle_width, Constants::paddle_width / Constants::window_width);
-    UniformLocation ubo_paddle_height = glGetUniformLocation(global.shader_program, "paddle_height_ratio");
-    glUniform1f(ubo_paddle_height, Constants::paddle_height / Constants::window_height);
+    global.ubo.time = glGetUniformLocation(global.shader_program, "u_Time");
+    global.ubo.pos = glGetUniformLocation(global.shader_program, "u_Pos");
+    global.ubo.width = glGetUniformLocation(global.shader_program, "u_Width");
+    global.ubo.height = glGetUniformLocation(global.shader_program, "u_Height");
+    global.ubo.color = glGetUniformLocation(global.shader_program, "u_Color");
 }
 
-void setup_paddle_vao() {
+auto setup_paddle_vao() -> void {
     // 1) Generate and bind the VAO up front
     glGenVertexArrays(1, &global.paddle_vao);
     glBindVertexArray(global.paddle_vao);
 
     // 2) Create VBO, upload vertex data, set attribute pointers
-    GLuint vbo;
+    gl_VBO vbo;
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER,
@@ -475,7 +522,7 @@ void setup_paddle_vao() {
     glEnableVertexAttribArray(0);
 
     // 3) Create EBO *while the VAO is still bound*, so the binding is stored in it
-    GLuint ebo;
+    gl_EBO ebo;
     glGenBuffers(1, &ebo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
@@ -487,7 +534,7 @@ void setup_paddle_vao() {
     glBindVertexArray(0);
 }
 
-void cleanup() {
+auto cleanup() -> void {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
@@ -495,6 +542,39 @@ void cleanup() {
     SDL_GL_DeleteContext(global.gl_context);
     SDL_DestroyWindow(global.window);
     SDL_Quit();
+}
+
+void _main_game_logic() {
+    auto ball_delta = global.ball_direction * (global.ball_speed / (global.delta_time.count() + 1));
+    global.ball.position += ball_delta;
+
+    bool ball_touched_paddle = collision_box_box(global.ball, global.paddle);
+    bool ball_touched_right_wall = global.ball.position.x + global.ball.width >= 1.0f;
+    bool ball_touched_left_wall = global.ball.position.x <= -1.0f;
+    bool ball_touched_top_wall = global.ball.position.y >= 1.0f;
+    bool ball_touched_bottom_wall = global.ball.position.y - global.ball.height <= -1.0f;
+
+    constexpr float deadzone = Constants::paddle_collision_deadzone;
+    if (ball_touched_paddle) {
+        global.ball.position.y = global.paddle.position.y + global.ball.height + deadzone;
+        global.ball_direction.y = -global.ball_direction.y;
+    }
+    if (ball_touched_right_wall) {
+        global.ball.position.x = 1.0f - global.ball.width - deadzone;
+        global.ball_direction.x = -global.ball_direction.x;
+    }
+    if (ball_touched_left_wall) {
+        global.ball.position.x = -1.0f + deadzone;
+        global.ball_direction.x = -global.ball_direction.x;
+    }
+    if (ball_touched_top_wall) {
+        global.ball.position.y = 1.0f - deadzone;
+        global.ball_direction.y = -global.ball_direction.y;
+    }
+    if (ball_touched_bottom_wall) {
+        global.ball.position.y = -1.0f + +global.ball.height + deadzone;
+        global.ball_direction.y = -global.ball_direction.y;
+    }
 }
 
 auto main(int argc, char **argv) -> int {
@@ -516,11 +596,7 @@ auto main(int argc, char **argv) -> int {
         global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
 
         _main_handle_inputs();
-        { // Game Logic
-            auto ball_delta = global.ball_direction / (1000.0f * (global.delta_time.count() + 1.0f)) * 12.0f;
-            std::cout << ball_delta.x << ", " << ball_delta.y << "\n";
-            global.ball_position += ball_delta;
-        }
+        _main_game_logic();
 
         _main_imgui();
         _main_render();

@@ -2,13 +2,12 @@
 
 layout (location = 0) in vec3 aPos;
 
-uniform float time;
+uniform float u_Time;
 
 uniform vec2 u_Pos;
-uniform vec2 u_Scale;
+uniform float u_Width;
+uniform float u_Height;
 
 void main() {
-    float x = aPos.x/16.0/4.0*u_Scale.x;
-    float y = aPos.y/9.0/4.0*u_Scale.y;
-    gl_Position = vec4(x+u_Pos.x,y+u_Pos.y,0.0f, 1.0f);
+    gl_Position=vec4(u_Pos + vec2(u_Width, u_Height) * aPos.xy, 0.0f,1.0f);
 }
